@@ -4,7 +4,8 @@
 // A named command is an inline code span, or a line of a code block, that starts with the
 // binary. That rule began as toon_cli's `named_commands` (tests/skill.rs), but this check
 // reads more than it does: it blanks fenced code blocks before reading inline spans, joins a
-// line that ends in `\` with the next, ends a command at a shell operator, and checks the
+// line that ends in `\` with the next, reads each command between shell operators on its own
+// (a `toon-client send` after a pipe is checked too), and checks the
 // long flags a command passes as well as its words.
 //
 // Run from the repository root: `node checks/skill-commands.mjs`. It fetches each client
@@ -55,16 +56,21 @@ export function namedFlags(text, binary) {
     const command = commandPath(rest);
     const flags = rest
       .split(/\s+/)
-      .map((word) => word.match(/^(--[a-z][a-z0-9-]*)(?:=.*)?$/)?.[1])
+      .map((word) => word.match(/^(--[a-z][a-z0-9-]*)(?:=.*|[.,:]+)?$/)?.[1])
       .filter((flag) => flag !== undefined && flag !== '--help');
     return [...new Set(flags)].map((flag) => ({ command, flag }));
   });
 }
 
 /**
- * The text after `<binary> ` of every inline code span and code-block line that starts with it,
- * up to the first shell operator: what follows a pipe or `&&` belongs to another program.
- * A line ending in `\` is read together with the line after it.
+ * The text after `<binary> ` of every command the skill names: an inline code span, or a line
+ * of a code block, that starts with it, and every later command in that span or code-block
+ * line that does, after a pipe, `&&`, `||`, `;`, `&`, `(`, `$(` or `)`. Each runs up to the next
+ * shell operator: what follows a pipe or `&&` belongs to the next program, which is read on
+ * its own. A line ending in `\` is read together with the line after it.
+ *
+ * A line outside a fenced code block counts only when it starts with the binary, as before:
+ * prose is not split at shell operators.
  *
  * @param {string} text
  * @param {string} binary
@@ -72,14 +78,48 @@ export function namedFlags(text, binary) {
  */
 function namedInvocations(text, binary) {
   const prefix = `${binary} `;
-  const spans = outsideCodeBlocks(text)
-    .split('`')
-    .filter((_, i) => i % 2 === 1)
-    .filter((span) => span.startsWith(prefix));
-  const lines = joinContinuations(text)
-    .map((line) => line.trimStart())
-    .filter((line) => line.startsWith(prefix));
-  return [...spans, ...lines].map((named) => ownWords(named.slice(prefix.length)));
+  const inCode = [...inlineSpans(outsideCodeBlocks(text)), ...joinContinuations(insideCodeBlocks(text))];
+  const prose = joinContinuations(outsideCodeBlocks(text)).map((line) => line.trimStart());
+  return [...inCode.flatMap(shellCommands), ...prose]
+    .filter((command) => command.startsWith(prefix))
+    .map((command) => ownWords(command.slice(prefix.length)));
+}
+
+/**
+ * The commands of a shell span or line, split at `|`, `||`, `&&`, `&`, `;`, `(`, `$(` and `)`,
+ * each without its leading space or a leading `do`, `then`, `else`, `!` or `time`.
+ *
+ * @param {string} line
+ * @returns {string[]}
+ */
+function shellCommands(line) {
+  return line
+    .split(/\|\||&&|\$\(|[|&;()]/)
+    .map((command) => command.trimStart().replace(/^(?:(?:do|then|else|time|!)\s+)+/, ''));
+}
+
+/**
+ * The contents of the inline code spans of `text`, as CommonMark reads them: a run of n
+ * backticks opens a span that only a run of exactly n closes, so ``` ``toon x`` ``` is one
+ * span, and one leading and trailing space is stripped from a span that has both.
+ *
+ * @param {string} text
+ * @returns {string[]}
+ */
+export function inlineSpans(text) {
+  const spans = [];
+  const runs = /`+/g;
+  let open = null;
+  for (let run = runs.exec(text); run !== null; run = runs.exec(text)) {
+    if (open === null) {
+      open = run;
+    } else if (run[0].length === open[0].length) {
+      const body = text.slice(open.index + open[0].length, run.index).replace(/\n/g, ' ');
+      spans.push(/^ .* $/.test(body) && body.trim() !== '' ? body.slice(1, -1) : body);
+      open = null;
+    }
+  }
+  return spans;
 }
 
 /**
@@ -135,22 +175,45 @@ function ownWords(rest) {
  * @param {string} text
  */
 export function outsideCodeBlocks(text) {
+  return splitCodeBlocks(text).outside;
+}
+
+/**
+ * `text` with every line outside its fenced code blocks, and the fences themselves, left
+ * empty: the code-block lines, each in its place.
+ *
+ * @param {string} text
+ */
+export function insideCodeBlocks(text) {
+  return splitCodeBlocks(text).inside;
+}
+
+/** @param {string} text */
+function splitCodeBlocks(text) {
   let fence = null;
-  return text
-    .split('\n')
-    .map((line) => {
-      const marker = line.match(/^ {0,3}(`{3,}|~{3,})/)?.[1];
-      if (fence === null && marker !== undefined) {
-        fence = marker;
-        return '';
+  const inside = [];
+  const outside = [];
+  for (const line of text.split('\n')) {
+    const marker = line.match(/^ {0,3}(`{3,}|~{3,})/)?.[1];
+    if (fence === null && marker !== undefined) {
+      fence = marker;
+    } else if (fence !== null) {
+      if (marker !== undefined && marker[0] === fence[0] && marker.length >= fence.length && line.trim() === marker) {
+        fence = null;
+      } else {
+        inside.push(line);
+        outside.push('');
+        continue;
       }
-      if (fence !== null) {
-        if (marker !== undefined && marker[0] === fence[0] && marker.length >= fence.length && line.trim() === marker) fence = null;
-        return '';
-      }
-      return line;
-    })
-    .join('\n');
+    } else {
+      inside.push('');
+      outside.push(line);
+      continue;
+    }
+    inside.push('');
+    outside.push('');
+  }
+  return { inside: inside.join('\n'), outside: outside.join('\n') };
 }
 
 /** @param {string} rest */

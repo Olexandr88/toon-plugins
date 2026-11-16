@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 
-import { checkRepo, lowestVersion, namedCommands, namedFlags, outsideCodeBlocks } from './skill-commands.mjs';
+import { checkRepo, inlineSpans, lowestVersion, namedCommands, namedFlags, outsideCodeBlocks } from './skill-commands.mjs';
 
 /** A repository holding `files` (path → text), as a directory. */
 function repo(files) {
@@ -207,17 +207,64 @@ test('a flag after a pipe, `&&`, `;`, `)` or a bare `--` is not the command\'s',
     'toon event query --kind 1 | jq --raw-output',
     'toon-client send g.toon.relay --amount 5 && nak event --sec K',
     'toon x -- --literal',
-    'toon y --a; toon z --b',
     '(toon w --c) --outside',
     '```',
   ].join('\n');
 
   assert.deepEqual(namedFlags(text, 'toon'), [
     { command: ['event', 'query'], flag: '--kind' },
-    { command: ['y'], flag: '--a' },
+    { command: ['w'], flag: '--c' },
   ]);
   assert.deepEqual(namedFlags(text, 'toon-client'), [{ command: ['send'], flag: '--amount' }]);
-  assert.deepEqual(namedCommands(text, 'toon'), [['event', 'query'], ['x'], ['y']]);
+  assert.deepEqual(namedCommands(text, 'toon'), [['event', 'query'], ['x'], ['w']]);
+});
+
+test('a second command after a shell operator is read too, with its own flags', () => {
+  const text = [
+    'Run `toon y --a; toon z --b` or `nak event | toon-client send g.r --json`.',
+    '',
+    '```',
+    "echo '{}' \\",
+    '  | nak event \\',
+    "  | jq -c '{event: .}' \\",
+    '  | toon-client send g.toon.relay --connector <url> --body - --json',
+    'for to in a b; do toon send "$to" --relay r; done',
+    'toon-client channel status && toon-client channel close <id> --force || echo $(toon version --short)',
+    '```',
+  ].join('\n');
+
+  assert.deepEqual(namedCommands(text, 'toon'), [['y'], ['z'], ['send'], ['version']]);
+  assert.deepEqual(namedFlags(text, 'toon'), [
+    { command: ['y'], flag: '--a' },
+    { command: ['z'], flag: '--b' },
+    { command: ['send'], flag: '--relay' },
+    { command: ['version'], flag: '--short' },
+  ]);
+  assert.deepEqual(namedCommands(text, 'toon-client'), [['send'], ['send'], ['channel', 'status'], ['channel', 'close']]);
+  assert.deepEqual(namedFlags(text, 'toon-client'), [
+    { command: ['send'], flag: '--json' },
+    { command: ['send'], flag: '--connector' },
+    { command: ['send'], flag: '--body' },
+    { command: ['send'], flag: '--json' },
+    { command: ['channel', 'close'], flag: '--force' },
+  ]);
+});
+
+test('prose is not split at a shell operator, only spans and code-block lines are', () => {
+  const text = 'A sentence; toon send is named here only in prose (toon x --y).';
+
+  assert.deepEqual(namedCommands(text, 'toon'), []);
+});
+
+test('a double-backtick span is one span, and a flag before a full stop or comma is still a flag', () => {
+  const text = 'Use ``toon send `r` --max-fee 3`` here, then `toon-client send g.r --json`, or `toon-client send g.r --json.`';
+
+  assert.deepEqual(inlineSpans(text), ['toon send `r` --max-fee 3', 'toon-client send g.r --json', 'toon-client send g.r --json.']);
+  assert.deepEqual(namedFlags(text, 'toon'), [{ command: ['send'], flag: '--max-fee' }]);
+  assert.deepEqual(namedFlags(text, 'toon-client'), [
+    { command: ['send'], flag: '--json' },
+    { command: ['send'], flag: '--json' },
+  ]);
 });
 
 test('a flag on a line continued with a backslash is the command\'s', () => {
