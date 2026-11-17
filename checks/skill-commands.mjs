@@ -80,9 +80,27 @@ function namedInvocations(text, binary) {
   const prefix = `${binary} `;
   const inCode = [...inlineSpans(outsideCodeBlocks(text)), ...joinContinuations(insideCodeBlocks(text))];
   const prose = joinContinuations(outsideCodeBlocks(text)).map((line) => line.trimStart());
-  return [...inCode.flatMap(shellCommands), ...prose]
+  return [...inCode.map(withoutComment).flatMap(shellCommands), ...prose]
     .filter((command) => command.startsWith(prefix))
     .map((command) => ownWords(command.slice(prefix.length)));
+}
+
+/**
+ * A shell span or line without its comment: from a `#` that starts a word outside quotes to
+ * the end, which the shell does not run, so no command or flag in it is the skill's.
+ *
+ * @param {string} line
+ */
+function withoutComment(line) {
+  let quote = null;
+  for (let i = 0; i < line.length; i += 1) {
+    const char = line[i];
+    if (quote === null && char === '#' && (i === 0 || /\s/.test(line[i - 1]))) return line.slice(0, i);
+    if (quote !== "'" && char === '\\') i += 1;
+    else if (quote === null && (char === "'" || char === '"')) quote = char;
+    else if (char === quote) quote = null;
+  }
+  return line;
 }
 
 /**
@@ -145,14 +163,19 @@ function joinContinuations(text) {
 }
 
 /**
- * The words of `rest` that are the command's own: those before a pipe, `&`, `;`, `)` or a
- * bare `--`. After `--` a word is an argument even when it looks like a flag.
+ * The words of `rest` that are the command's own: those before a pipe, `&`, `;`, `)`, a
+ * bare `--` or a shell comment. After `--` a word is an argument even when it looks like a
+ * flag, and from a word that starts with an unquoted `#` to the end of the line the shell
+ * reads a comment, so `toon send x # use --bogus` names no flag.
  *
  * @param {string} rest
  */
 function ownWords(rest) {
   const words = [];
+  let quote = null;
   for (const word of rest.split(/\s+/).filter(Boolean)) {
+    if (quote === null && word.startsWith('#')) break;
+    quote = quoteAfter(word, quote);
     if (word === '--') break;
     const operator = word.search(/[|&;)]/);
     if (operator === -1) {
@@ -163,6 +186,23 @@ function ownWords(rest) {
     break;
   }
   return words.join(' ');
+}
+
+/**
+ * The quote still open after `word`, given the one open before it: `'` or `"`, or null.
+ *
+ * @param {string} word
+ * @param {string | null} open
+ */
+function quoteAfter(word, open) {
+  let quote = open;
+  for (let i = 0; i < word.length; i += 1) {
+    const char = word[i];
+    if (quote !== "'" && char === '\\') i += 1;
+    else if (quote === null && (char === "'" || char === '"')) quote = char;
+    else if (char === quote) quote = null;
+  }
+  return quote;
 }
 
 /**

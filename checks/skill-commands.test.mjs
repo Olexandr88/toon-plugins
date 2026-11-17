@@ -219,6 +219,28 @@ test('a flag after a pipe, `&&`, `;`, `)` or a bare `--` is not the command\'s',
   assert.deepEqual(namedCommands(text, 'toon'), [['event', 'query'], ['x'], ['w']]);
 });
 
+test('a shell comment names no command or flag, but a quoted `#` is not one', () => {
+  const text = [
+    'Send it with `toon send g.toon.relay # use --bogus for X`.',
+    '',
+    '~~~bash',
+    'toon send g.toon.relay # use --bogus for X',
+    'toon send g.toon.relay --to K # then | toon-client send r --made-up',
+    '# toon send --commented-out',
+    'toon send "a # b" --amount 5',
+    "toon send 'c --d' x#y --fee 1",
+    '~~~',
+  ].join('\n');
+
+  assert.deepEqual(namedFlags(text, 'toon'), [
+    { command: ['send'], flag: '--to' },
+    { command: ['send'], flag: '--amount' },
+    { command: ['send'], flag: '--fee' },
+  ]);
+  assert.deepEqual(namedFlags(text, 'toon-client'), []);
+  assert.deepEqual(namedCommands(text, 'toon'), [['send'], ['send'], ['send'], ['send'], ['send']]);
+});
+
 test('a second command after a shell operator is read too, with its own flags', () => {
   const text = [
     'Run `toon y --a; toon z --b` or `nak event | toon-client send g.r --json`.',
