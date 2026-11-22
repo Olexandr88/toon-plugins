@@ -5,6 +5,23 @@ Pull requests are welcome. CI runs `node --test checks/*.test.mjs` and
 
 This repository has a monthly pool on Slop: https://slop.cash/projects/toon-plugins
 
+## What gets merged
+
+From 22 November 2026 we merge only pull requests that close an open issue labelled
+`slop-wanted`. The same rule applies in `toon-protocol/toon` and `toon-protocol/toon_cli`,
+which share this pool.
+
+- Find the work here:
+  https://github.com/search?q=org%3Atoon-protocol+label%3Aslop-wanted+is%3Aopen&type=issues
+- Name the issue in the pull request body with `Closes #<number>`.
+- A pull request that closes no `slop-wanted` issue is closed without review. If you paid
+  the submission fee on it, the fee is kept (see below), so check before you open one.
+- If several pull requests close the same issue, we merge the first one that does what
+  the issue asks and close the others.
+- Want to work on something that is not listed? Open an issue and ask first. Start the
+  pull request only after a maintainer adds the `slop-wanted` label.
+- Pull requests opened before 22 November 2026 are not affected.
+
 ## Submission fee
 
 **Status: on, through Slop.** This project has Slop's refundable submission fee turned on
