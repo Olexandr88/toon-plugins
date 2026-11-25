@@ -35,7 +35,10 @@ names a `toon` or `toon-client` command, or a long flag of one, that the lowest 
 its sending skill's frontmatter range lacks, or names another plugin's binary. A command
 whose `--help` exits 0 still fails when a command before it lists subcommands and its help
 does not name the word (toon-client 5.0 answers `channel <anything> --help` with the
-channel help). It fetches both clients, so the gate needs network access. Keep the job's
+channel help). It fetches both clients, so the gate needs network access. It runs only
+client bytes this repository pins (`checks/client-pins.json`, `checks/clients/`), with an
+environment of `PATH` and an empty `HOME`: when a sending skill's lower bound moves, add the
+pin in the same change (the top of `checks/skill-commands.mjs` says how). Keep the job's
 `run:` steps free of `if:` and `${{ }}`: the gate skips those.
 The rule lives in one place, `gateFromCi` in `.sandcastle/run-gate.ts`, tested by
 `.sandcastle/run-gate.test.ts`.

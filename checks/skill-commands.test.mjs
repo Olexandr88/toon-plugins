@@ -1,10 +1,23 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
-import { checkRepo, inlineSpans, lowestVersion, namedCommands, namedFlags, outsideCodeBlocks } from './skill-commands.mjs';
+import {
+  checkRepo,
+  clientEnv,
+  inlineSpans,
+  lockedClient,
+  lowestSupportedVersion,
+  lowestVersion,
+  namedCommands,
+  namedFlags,
+  outsideCodeBlocks,
+  pinnedSha256,
+  releasePlatform,
+} from './skill-commands.mjs';
 
 /** A repository holding `files` (path → text), as a directory. */
 function repo(files) {
@@ -370,4 +383,79 @@ test('blanking fenced blocks keeps every line in its place', () => {
   const blanked = outsideCodeBlocks(text);
 
   assert.deepEqual(blanked.split('\n'), ['before', '', '', '', 'after `toon y`']);
+});
+
+test('a toon_cli archive runs only when its SHA-256 is pinned in this repository', () => {
+  const pins = { toon: { '0.6.0': { 'toon-v0.6.0-linux-x86_64.tar.gz': 'ab'.repeat(32) } } };
+
+  assert.equal(pinnedSha256(pins, '0.6.0', 'toon-v0.6.0-linux-x86_64.tar.gz'), 'ab'.repeat(32));
+  assert.throws(() => pinnedSha256(pins, '0.6.0', 'toon-v0.6.0-linux-aarch64.tar.gz'), /no SHA-256 for toon-v0\.6\.0-linux-aarch64\.tar\.gz/);
+  assert.throws(() => pinnedSha256(pins, '0.7.0', 'toon-v0.7.0-linux-x86_64.tar.gz'), /checks\/client-pins\.json/);
+  assert.throws(
+    () => pinnedSha256({ toon: { '0.6.0': { 'toon-v0.6.0-linux-x86_64.tar.gz': 'not a hash' } } }, '0.6.0', 'toon-v0.6.0-linux-x86_64.tar.gz'),
+    /not a SHA-256/,
+  );
+});
+
+test('toon-client installs only from a committed lockfile that pins the requested version', () => {
+  const lock = (version) =>
+    JSON.stringify({ lockfileVersion: 3, packages: { 'node_modules/@toon-protocol/client': { version, integrity: 'sha512-x' } } });
+  const root = repo({
+    'checks/clients/toon-client-5.0.0/package.json': '{}',
+    'checks/clients/toon-client-5.0.0/package-lock.json': lock('5.0.0'),
+    'checks/clients/toon-client-5.1.0/package.json': '{}',
+    'checks/clients/toon-client-5.1.0/package-lock.json': lock('5.0.0'),
+  });
+
+  assert.equal(lockedClient(join(root, 'checks'), '5.0.0'), join(root, 'checks', 'clients', 'toon-client-5.0.0'));
+  assert.throws(() => lockedClient(join(root, 'checks'), '5.0.2'), /no lockfile for toon-client 5\.0\.2/);
+  assert.throws(() => lockedClient(join(root, 'checks'), '5.1.0'), /pins @toon-protocol\/client 5\.0\.0, not 5\.1\.0/);
+});
+
+test('a downloaded client runs with none of the caller\'s environment but PATH', () => {
+  const env = clientEnv('/tmp/empty-home', {
+    PATH: '/usr/bin',
+    HOME: '/home/agent',
+    GH_TOKEN: 'ghs_secret',
+    CLAUDE_CODE_OAUTH_TOKEN: 'secret',
+    NODE_OPTIONS: '--require /tmp/x.js',
+  });
+
+  assert.deepEqual(env, { PATH: '/usr/bin', HOME: '/tmp/empty-home' });
+});
+
+test('this repository pins the client versions its own sending skills state', () => {
+  const checks = dirname(fileURLToPath(import.meta.url));
+  const lowest = (plugin) => lowestSupportedVersion(join(checks, '..'), plugin);
+  const pins = JSON.parse(readFileSync(join(checks, 'client-pins.json'), 'utf8'));
+
+  const toon = lowest('toon-cli');
+  for (const cpu of ['x86_64', 'aarch64']) pinnedSha256(pins, toon, `toon-v${toon}-linux-${cpu}.tar.gz`);
+  lockedClient(checks, lowest('toon-client'));
+});
+
+test('every pinned client lockfile installs only registry packages with integrity and no install scripts', () => {
+  const clients = join(dirname(fileURLToPath(import.meta.url)), 'clients');
+  const dirs = readdirSync(clients);
+  assert.ok(dirs.length > 0);
+  for (const dir of dirs) {
+    const { packages } = JSON.parse(readFileSync(join(clients, dir, 'package-lock.json'), 'utf8'));
+    for (const [name, entry] of Object.entries(packages)) {
+      if (name === '') continue;
+      assert.ok(entry.resolved?.startsWith('https://registry.npmjs.org/'), `${dir}: ${name} is not from registry.npmjs.org`);
+      assert.ok(entry.integrity, `${dir}: ${name} has no integrity hash`);
+      assert.ok(!entry.hasInstallScript, `${dir}: ${name} has an install script`);
+    }
+  }
+});
+
+test('picks the release asset for the host platform', () => {
+  assert.equal(releasePlatform('linux', 'x64'), 'linux-x86_64');
+  assert.equal(releasePlatform('linux', 'arm64'), 'linux-aarch64');
+  assert.equal(releasePlatform('darwin', 'arm64'), 'macos-aarch64');
+});
+
+test('fails with a clear message on a platform toon publishes no asset for', () => {
+  assert.throws(() => releasePlatform('darwin', 'x64'), /no release asset for macOS on x86_64/);
+  assert.throws(() => releasePlatform('win32', 'x64'), /no release asset for win32/);
 });
